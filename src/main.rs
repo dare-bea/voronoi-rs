@@ -26,10 +26,10 @@ struct Args {
 fn weight(&pixel: &(u32, u32, [u8; 3]), width: u32, height: u32) -> f64 {
     // Calculate the weight of the pixel based on its distance to the center of the image.
     // Weight is inversely proportional to the distance.
-    let center_x = width as f64 / 2.0;
-    let center_y = height as f64 / 2.0;
-    let x_dist = (pixel.0 as f64 - center_x) / width as f64;
-    let y_dist = (pixel.1 as f64 - center_y) / height as f64;
+    let center_x = f64::from(width) / 2.0;
+    let center_y = f64::from(height) / 2.0;
+    let x_dist = (f64::from(pixel.0) - center_x) / f64::from(width);
+    let y_dist = (f64::from(pixel.1) - center_y) / f64::from(height);
     let dist = (x_dist.powi(2) + y_dist.powi(2)).sqrt().sqrt();
     let dist_weight = 1.0 / (dist + 1.0);
 
@@ -49,23 +49,22 @@ fn main() {
     let img_height = img.height();
     let img_width = img.width();
     let img_size = img_height * img_width;
-    println!("Image dimensions: {}x{}", img_width, img_height);
+    println!("Image dimensions: {img_width}x{img_height}");
 
     let seed = match args.seed {
         Some(seed) => seed,
         None => rand::rng().random::<u64>(),
     };
-    println!("Seed: {}", seed);
+    println!("Seed: {seed}");
     let mut rng = StdRng::seed_from_u64(seed);
 
-    eprint!("Indexing {} points...", img_size);
+    eprint!("Indexing {img_size} points...");
     let mut all_points = Vec::with_capacity(img_size as usize);
     for (x, y, px) in img.enumerate_pixels() {
         all_points.push((x, y, px.0));
         if x == 0 {
             eprint!(
-                "\rIndexing {} points... {y} / {1} rows",
-                img_size, img_height
+                "\rIndexing {img_size} points... {y} / {img_height} rows"
             );
         }
     }
@@ -91,7 +90,8 @@ fn main() {
         let mut min_dist = f64::MAX;
         let mut min_color = [0, 0, 0];
         for (px, py, pcolor) in &points {
-            let dist = ((x as i32 - *px as i32).pow(2) + (y as i32 - *py as i32).pow(2)) as f64;
+            #[allow(clippy::cast_possible_wrap)]
+            let dist = f64::from((x as i32 - *px as i32).pow(2) + (y as i32 - *py as i32).pow(2));
             if dist < min_dist {
                 min_dist = dist;
                 min_color = *pcolor;
