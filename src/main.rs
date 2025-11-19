@@ -25,7 +25,10 @@ struct Args {
 
     /// Color distance weight
     #[arg(short, long, default_value_t = 3.5)]
-    weight: f64
+    weight: f64,
+
+    #[arg(short, long, default_value_t = 1.0)]
+    blur: f32,
 }
 
 fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32) -> f64 {
@@ -47,25 +50,25 @@ const COLOR_WEIGHT_MULT: f64 = 10000.0;
 fn score<const N: usize>(
     &pixel: &(u32, u32, [u8; N]),
     &point: &(u32, u32, [u8; N]),
-    img: &image::RgbImage,
-    color_weight: f64
+    _img: &image::RgbImage,
+    color_weight: &f64,
+    max_color_dist: &f64,
+    max_pos_dist: &f64
 ) -> f64 {
     let (x, y, color) = pixel;
     let (px, py, pcolor) = point;
 
     let pos_dist = f64::from(x.abs_diff(px).pow(2)) + f64::from(y.abs_diff(py).pow(2));
     
-    if color_weight == 0.0 {
-        pos_dist
-    } else {
-        let max_pos_dist = img.width().pow(2) as f64 + img.height().pow(2) as f64;
-        let max_color_dist = 255.0 * N as f64;
-        
-        let color_dist = Iterator::zip(color.iter(), pcolor.iter())
-            .map(|(c1, c2)| f64::from(c1.abs_diff(*c2)))
-            .sum::<f64>();
-        
-        pos_dist * max_color_dist + color_dist * max_pos_dist * color_weight / COLOR_WEIGHT_MULT
+    match color_weight {
+        0.0 => pos_dist,
+        _ => {
+            let color_dist = Iterator::zip(color.iter(), pcolor.iter())
+                .map(|(c1, c2)| f64::from(c1.abs_diff(*c2)))
+                .sum::<f64>();
+            
+            pos_dist / max_pos_dist + color_dist / max_color_dist * color_weight / COLOR_WEIGHT_MULT
+        },
     }
 }
 
@@ -79,11 +82,13 @@ fn main() {
         }
         Ok(img) => img.into_rgb8(),
     };
-    let img_height = img.height();
-    let img_width = img.width();
+    let (img_width, img_height) = img.dimensions();
     let img_size = img_height * img_width;
     println!("Image dimensions: {img_width}x{img_height}");
 
+    let max_pos_dist = img_width.pow(2) as f64 + img_height.pow(2) as f64;
+    let max_color_dist = 255.0 * <image::Rgb<u8> as image::Pixel>::CHANNEL_COUNT as f64;
+    
     let mut rng = {
         let seed = match args.seed {
             Some(seed) => seed,
@@ -128,12 +133,19 @@ fn main() {
 
     let voronoi = {
         eprint!("Calculating voronoi diagram... 0 / {img_height}");
-        let mut voronoi = fast_blur(&img, 1.0);
+        let mut voronoi = fast_blur(&img, args.blur);
         for (x, y, pixel) in voronoi.enumerate_pixels_mut() {
             let mut min_score = f64::MAX;
             let mut min_color = [0, 0, 0];
             for &(px, py, pcolor) in &points {
-                let s = score(&(x, y, pixel.0), &(px, py, pcolor), &img, args.weight);
+                let s = score(
+                    &(x, y, pixel.0),
+                    &(px, py, pcolor),
+                    &img,
+                    &args.weight,
+                    &max_color_dist,
+                    &max_pos_dist
+                );
                 if s < min_score {
                     min_score = s;
                     min_color = pcolor;
