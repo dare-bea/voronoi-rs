@@ -32,8 +32,8 @@ struct Args {
     blur: f32,
 
     /// Add circles at point locations
-    #[arg(long, default_value_t = false)]
-    show_points: bool,
+    #[arg(long)]
+    point_radius: Option<u32>,
 }
 
 fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32) -> f64 {
@@ -136,6 +136,7 @@ fn main() {
         for (x, y, pixel) in voronoi.enumerate_pixels_mut() {
             let mut min_score = f64::MAX;
             let mut min_color = [0, 0, 0];
+            let mut min_pos = (0, 0);
             for &(px, py, pcolor) in &points {
                 let s = score(
                     &(x, y, pixel.0),
@@ -148,15 +149,16 @@ fn main() {
                 if s < min_score {
                     min_score = s;
                     min_color = pcolor;
+                    min_pos = (px, py);
                 }
-                if args.show_points && {
-                    // 5 pixel radius circle
-                    let dx = x.abs_diff(px);
-                    let dy = y.abs_diff(py);
-                    dx * dx + dy * dy <= 25
-                } {
-                    min_color = [0, 0, 0];
-                }
+            }
+
+            if let Some(radius) = args.point_radius && {
+                let dx = x.abs_diff(min_pos.0);
+                let dy = y.abs_diff(min_pos.1);
+                dx * dx + dy * dy <= radius * radius
+            } {
+                min_color = min_color.map(|c| u8::MAX - c);
             }
 
             *pixel = image::Rgb(min_color);
