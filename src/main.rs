@@ -156,7 +156,7 @@ fn main() {
             if let Some(radius) = args.point_radius && {
                 let dx = x.abs_diff(min_pos.0);
                 let dy = y.abs_diff(min_pos.1);
-                dx * dx + dy * dy <= radius * radius
+                dx * dx + dy * dy < radius * (radius - 1)
             } {
                 min_color = min_color.map(|c| u8::MAX - c);
             }
