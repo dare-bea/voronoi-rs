@@ -44,31 +44,29 @@ fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32)
     dist_weight - 0.3
 }
 
-
 const COLOR_WEIGHT_MULT: f64 = 10000.0;
 
 fn score<const N: usize>(
     &pixel: &(u32, u32, [u8; N]),
     &point: &(u32, u32, [u8; N]),
     _img: &image::RgbImage,
-    color_weight: &f64,
-    max_color_dist: &f64,
-    max_pos_dist: &f64
+    color_weight: f64,
+    max_color_dist: f64,
+    max_pos_dist: f64,
 ) -> f64 {
     let (x, y, color) = pixel;
     let (px, py, pcolor) = point;
 
     let pos_dist = f64::from(x.abs_diff(px).pow(2)) + f64::from(y.abs_diff(py).pow(2));
-    
-    match color_weight {
-        0.0 => pos_dist,
-        _ => {
-            let color_dist = Iterator::zip(color.iter(), pcolor.iter())
-                .map(|(c1, c2)| f64::from(c1.abs_diff(*c2)))
-                .sum::<f64>();
-            
-            pos_dist / max_pos_dist + color_dist / max_color_dist * color_weight / COLOR_WEIGHT_MULT
-        },
+
+    if let 0.0 = color_weight {
+        pos_dist
+    } else {
+        let color_dist = Iterator::zip(color.iter(), pcolor.iter())
+            .map(|(c1, c2)| f64::from(c1.abs_diff(*c2)))
+            .sum::<f64>();
+
+        pos_dist / max_pos_dist + color_dist / max_color_dist * color_weight / COLOR_WEIGHT_MULT
     }
 }
 
@@ -86,9 +84,9 @@ fn main() {
     let img_size = img_height * img_width;
     println!("Image dimensions: {img_width}x{img_height}");
 
-    let max_pos_dist = img_width.pow(2) as f64 + img_height.pow(2) as f64;
-    let max_color_dist = 255.0 * <image::Rgb<u8> as image::Pixel>::CHANNEL_COUNT as f64;
-    
+    let max_pos_dist = f64::from(img_width.pow(2)) + f64::from(img_height.pow(2));
+    let max_color_dist = 255.0 * f64::from(<image::Rgb<u8> as image::Pixel>::CHANNEL_COUNT);
+
     let mut rng = {
         let seed = match args.seed {
             Some(seed) => seed,
@@ -117,12 +115,8 @@ fn main() {
     let points = {
         eprint!("Generating {} points...", args.points);
         let mut points: Vec<(u32, u32, [u8; 3])> = Vec::with_capacity(args.points);
-        let weights = WeightedIndex::new(
-            pixels
-                .iter()
-                .map(|px| weight(px, img_width, img_height)),
-        )
-        .unwrap();
+        let weights =
+            WeightedIndex::new(pixels.iter().map(|px| weight(px, img_width, img_height))).unwrap();
         for _ in 0..args.points {
             let idx = weights.sample(&mut rng);
             points.push(pixels[idx]);
@@ -142,9 +136,9 @@ fn main() {
                     &(x, y, pixel.0),
                     &(px, py, pcolor),
                     &img,
-                    &args.weight,
-                    &max_color_dist,
-                    &max_pos_dist
+                    args.weight,
+                    max_color_dist,
+                    max_pos_dist,
                 );
                 if s < min_score {
                     min_score = s;
