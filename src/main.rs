@@ -22,6 +22,10 @@ struct Args {
     /// Seed for random number generator
     #[arg(long)]
     seed: Option<u64>,
+
+    /// Color distance weight
+    #[arg(short, long, default_value_t = 3.5)]
+    weight: f64
 }
 
 fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32) -> f64 {
@@ -37,19 +41,32 @@ fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32)
     dist_weight - 0.3
 }
 
+
+const COLOR_WEIGHT_MULT: f64 = 10000.0;
+
 fn score<const N: usize>(
     &pixel: &(u32, u32, [u8; N]),
     &point: &(u32, u32, [u8; N]),
-    _: &image::RgbImage,
+    img: &image::RgbImage,
+    color_weight: f64
 ) -> f64 {
     let (x, y, color) = pixel;
     let (px, py, pcolor) = point;
-    let pos_dist = f64::from(x.abs_diff(px).pow(2)) + f64::from(y.abs_diff(py).pow(2));
-    let color_dist = Iterator::zip(color.iter(), pcolor.iter())
-        .map(|(c1, c2)| f64::from(c1.abs_diff(*c2)))
-        .sum::<f64>();
 
-    pos_dist + color_dist
+    let pos_dist = f64::from(x.abs_diff(px).pow(2)) + f64::from(y.abs_diff(py).pow(2));
+    
+    if color_weight == 0.0 {
+        pos_dist
+    } else {
+        let max_pos_dist = img.width().pow(2) as f64 + img.height().pow(2) as f64;
+        let max_color_dist = 255.0 * N as f64;
+        
+        let color_dist = Iterator::zip(color.iter(), pcolor.iter())
+            .map(|(c1, c2)| f64::from(c1.abs_diff(*c2)))
+            .sum::<f64>();
+        
+        pos_dist * max_color_dist + color_dist * max_pos_dist * color_weight / COLOR_WEIGHT_MULT
+    }
 }
 
 fn main() {
@@ -76,31 +93,34 @@ fn main() {
         StdRng::seed_from_u64(seed)
     };
 
-    let all_points = {
-        eprint!("Indexing {img_size} points...");
-        let mut all_points = Vec::with_capacity(img_size as usize);
+    println!("Points: {}", args.points);
+    println!("Color weight: {}", args.weight);
+
+    let pixels = {
+        eprint!("Indexing {img_size} pixels...");
+        let mut pixels = Vec::with_capacity(img_size as usize);
         for (x, y, px) in img.enumerate_pixels() {
-            all_points.push((x, y, px.0));
+            pixels.push((x, y, px.0));
             if x == 0 {
-                eprint!("\rIndexing {img_size} points... {y} / {img_height} rows");
+                eprint!("\rIndexing {img_size} pixels... {y} / {img_height} rows");
             }
         }
-        eprintln!("\rIndexing {img_size} points... {img_height} / {img_height} rows",);
-        all_points
+        eprintln!("\rIndexing {img_size} pixels... {img_height} / {img_height} rows",);
+        pixels
     };
 
     let points = {
         eprint!("Generating {} points...", args.points);
         let mut points: Vec<(u32, u32, [u8; 3])> = Vec::with_capacity(args.points);
         let weights = WeightedIndex::new(
-            all_points
+            pixels
                 .iter()
                 .map(|px| weight(px, img_width, img_height)),
         )
         .unwrap();
         for _ in 0..args.points {
             let idx = weights.sample(&mut rng);
-            points.push(all_points[idx]);
+            points.push(pixels[idx]);
         }
         eprintln!("\rGenerating {} points... Done", args.points);
         points
@@ -113,7 +133,7 @@ fn main() {
             let mut min_score = f64::MAX;
             let mut min_color = [0, 0, 0];
             for &(px, py, pcolor) in &points {
-                let s = score(&(x, y, pixel.0), &(px, py, pcolor), &img);
+                let s = score(&(x, y, pixel.0), &(px, py, pcolor), &img, args.weight);
                 if s < min_score {
                     min_score = s;
                     min_color = pcolor;
