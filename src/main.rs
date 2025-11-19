@@ -1,10 +1,10 @@
 use clap::Parser;
+use image::imageops::fast_blur;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::path::PathBuf;
-use image::imageops::fast_blur;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -37,19 +37,18 @@ fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32)
     dist_weight - 0.3
 }
 
-
 fn score<const N: usize>(
     &pixel: &(u32, u32, [u8; N]),
     &point: &(u32, u32, [u8; N]),
-    _: &image::RgbImage
+    _: &image::RgbImage,
 ) -> f64 {
     let (x, y, color) = pixel;
     let (px, py, pcolor) = point;
-    let pos_dist = x.abs_diff(px).pow(2) as f64 + y.abs_diff(py).pow(2) as f64;
+    let pos_dist = f64::from(x.abs_diff(px).pow(2)) + f64::from(y.abs_diff(py).pow(2));
     let color_dist = Iterator::zip(color.iter(), pcolor.iter())
-        .map(|(c1, c2)| c1.abs_diff(*c2) as f64)
+        .map(|(c1, c2)| f64::from(c1.abs_diff(*c2)))
         .sum::<f64>();
-    
+
     pos_dist + color_dist
 }
 
@@ -81,16 +80,14 @@ fn main() {
         eprint!("Indexing {img_size} points...");
         let mut all_points = Vec::with_capacity(img_size as usize);
         for (x, y, px) in img.enumerate_pixels() {
-            all_points.push((x, y, px.clone().0));
+            all_points.push((x, y, px.0));
             if x == 0 {
-                eprint!(
-                    "\rIndexing {img_size} points... {y} / {img_height} rows"
-                );
+                eprint!("\rIndexing {img_size} points... {y} / {img_height} rows");
             }
         }
         eprintln!("\rIndexing {img_size} points... {img_height} / {img_height} rows",);
         all_points
-    }
+    };
 
     let points = {
         eprint!("Generating {} points...", args.points);
@@ -99,7 +96,8 @@ fn main() {
             all_points
                 .iter()
                 .map(|px| weight(px, img_width, img_height)),
-        ).unwrap();
+        )
+        .unwrap();
         for _ in 0..args.points {
             let idx = weights.sample(&mut rng);
             points.push(all_points[idx]);
@@ -115,22 +113,22 @@ fn main() {
             let mut min_score = f64::MAX;
             let mut min_color = [0, 0, 0];
             for &(px, py, pcolor) in &points {
-                let s = score(&(x, y, pixel.clone().0), &(px, py, pcolor), &img);
+                let s = score(&(x, y, pixel.0), &(px, py, pcolor), &img);
                 if s < min_score {
                     min_score = s;
                     min_color = pcolor;
                 }
             }
-    
+
             *pixel = image::Rgb(min_color);
-    
+
             if x == 0 {
                 eprint!("\rCalculating voronoi diagram... {y} / {img_height} rows");
             }
         }
         eprintln!("\rCalculating voronoi diagram... {img_height} / {img_height} rows");
         voronoi
-    }
+    };
 
     let save_result = voronoi.save(&args.output);
     if let Err(err) = save_result {
