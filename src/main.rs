@@ -27,8 +27,13 @@ struct Args {
     #[arg(short, long, default_value_t = 3.5)]
     weight: f64,
 
+    /// Blur amount before processing
     #[arg(short, long, default_value_t = 1.0)]
     blur: f32,
+
+    /// Add circles at point locations
+    #[arg(long, default_value_t = false)]
+    show_points: bool,
 }
 
 fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32) -> f64 {
@@ -143,6 +148,14 @@ fn main() {
                 if s < min_score {
                     min_score = s;
                     min_color = pcolor;
+                }
+                if args.show_points && {
+                    // 5 pixel radius circle
+                    let dx = x.abs_diff(px);
+                    let dy = y.abs_diff(py);
+                    dx * dx + dy * dy <= 25
+                } {
+                    min_color = [0, 0, 0];
                 }
             }
 
