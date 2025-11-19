@@ -4,6 +4,7 @@ use rand::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::path::PathBuf;
+use image::imageops::fast_blur;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -23,7 +24,7 @@ struct Args {
     seed: Option<u64>,
 }
 
-fn weight(&pixel: &(u32, u32, [u8; 3]), width: u32, height: u32) -> f64 {
+fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32) -> f64 {
     // Calculate the weight of the pixel based on its distance to the center of the image.
     // Weight is inversely proportional to the distance.
     let center_x = f64::from(width) / 2.0;
@@ -34,6 +35,22 @@ fn weight(&pixel: &(u32, u32, [u8; 3]), width: u32, height: u32) -> f64 {
     let dist_weight = 1.0 / (dist + 1.0);
 
     dist_weight - 0.3
+}
+
+
+fn score<const N: usize>(
+    &pixel: &(u32, u32, [u8; N]),
+    &point: &(u32, u32, [u8; N]),
+    _: &image::RgbImage
+) -> f64 {
+    let (x, y, color) = pixel;
+    let (px, py, pcolor) = point;
+    let pos_dist = x.abs_diff(px).pow(2) as f64 + y.abs_diff(py).pow(2) as f64;
+    let color_dist = Iterator::zip(color.iter(), pcolor.iter())
+        .map(|(c1, c2)| c1.abs_diff(*c2) as f64)
+        .sum::<f64>();
+    
+    pos_dist + color_dist
 }
 
 fn main() {
@@ -51,60 +68,69 @@ fn main() {
     let img_size = img_height * img_width;
     println!("Image dimensions: {img_width}x{img_height}");
 
-    let seed = match args.seed {
-        Some(seed) => seed,
-        None => rand::rng().random::<u64>(),
+    let mut rng = {
+        let seed = match args.seed {
+            Some(seed) => seed,
+            None => rand::rng().random::<u64>(),
+        };
+        println!("Seed: {seed}");
+        StdRng::seed_from_u64(seed)
     };
-    println!("Seed: {seed}");
-    let mut rng = StdRng::seed_from_u64(seed);
 
-    eprint!("Indexing {img_size} points...");
-    let mut all_points = Vec::with_capacity(img_size as usize);
-    for (x, y, px) in img.enumerate_pixels() {
-        all_points.push((x, y, px.0));
-        if x == 0 {
-            eprint!(
-                "\rIndexing {img_size} points... {y} / {img_height} rows"
-            );
-        }
-    }
-    eprintln!("\rIndexing {img_size} points... {img_height} / {img_height} rows",);
-
-    eprint!("Generating {} points...", args.points);
-    let mut points: Vec<(u32, u32, [u8; 3])> = Vec::with_capacity(args.points);
-    let dist2 = WeightedIndex::new(
-        all_points
-            .iter()
-            .map(|px| weight(px, img_width, img_height)),
-    )
-    .unwrap();
-    for _ in 0..args.points {
-        let idx = dist2.sample(&mut rng);
-        points.push(all_points[idx]);
-    }
-    eprintln!("\rGenerating {} points... Done", args.points);
-
-    eprint!("Calculating voronoi diagram... 0 / {img_height}");
-    let mut voronoi = image::RgbImage::new(img_width, img_height);
-    for (x, y, color) in voronoi.enumerate_pixels_mut() {
-        let mut min_dist = f64::MAX;
-        let mut min_color = [0, 0, 0];
-        for (px, py, pcolor) in &points {
-            #[allow(clippy::cast_possible_wrap)]
-            let dist = f64::from((x as i32 - *px as i32).pow(2) + (y as i32 - *py as i32).pow(2));
-            if dist < min_dist {
-                min_dist = dist;
-                min_color = *pcolor;
+    let all_points = {
+        eprint!("Indexing {img_size} points...");
+        let mut all_points = Vec::with_capacity(img_size as usize);
+        for (x, y, px) in img.enumerate_pixels() {
+            all_points.push((x, y, px.clone().0));
+            if x == 0 {
+                eprint!(
+                    "\rIndexing {img_size} points... {y} / {img_height} rows"
+                );
             }
         }
-
-        *color = image::Rgb(min_color);
-
-        if x == 0 {
-            eprint!("\rCalculating voronoi diagram... {y} / {img_height} rows");
-        }
+        eprintln!("\rIndexing {img_size} points... {img_height} / {img_height} rows",);
+        all_points
     }
-    eprintln!("\rCalculating voronoi diagram... {img_height} / {img_height} rows");
+
+    let points = {
+        eprint!("Generating {} points...", args.points);
+        let mut points: Vec<(u32, u32, [u8; 3])> = Vec::with_capacity(args.points);
+        let weights = WeightedIndex::new(
+            all_points
+                .iter()
+                .map(|px| weight(px, img_width, img_height)),
+        ).unwrap();
+        for _ in 0..args.points {
+            let idx = weights.sample(&mut rng);
+            points.push(all_points[idx]);
+        }
+        eprintln!("\rGenerating {} points... Done", args.points);
+        points
+    };
+
+    let voronoi = {
+        eprint!("Calculating voronoi diagram... 0 / {img_height}");
+        let mut voronoi = fast_blur(&img, 1.0);
+        for (x, y, pixel) in voronoi.enumerate_pixels_mut() {
+            let mut min_score = f64::MAX;
+            let mut min_color = [0, 0, 0];
+            for &(px, py, pcolor) in &points {
+                let s = score(&(x, y, pixel.clone().0), &(px, py, pcolor), &img);
+                if s < min_score {
+                    min_score = s;
+                    min_color = pcolor;
+                }
+            }
+    
+            *pixel = image::Rgb(min_color);
+    
+            if x == 0 {
+                eprint!("\rCalculating voronoi diagram... {y} / {img_height} rows");
+            }
+        }
+        eprintln!("\rCalculating voronoi diagram... {img_height} / {img_height} rows");
+        voronoi
+    }
 
     let save_result = voronoi.save(&args.output);
     if let Err(err) = save_result {
