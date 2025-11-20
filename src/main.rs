@@ -16,7 +16,7 @@ struct Args {
     output: PathBuf,
 
     /// Number of points to generate
-    #[arg(short, long, default_value_t = 100)]
+    #[arg(short, long, default_value_t = 1000)]
     points: usize,
 
     /// Seed for random number generator
@@ -24,11 +24,11 @@ struct Args {
     seed: Option<u64>,
 
     /// Color distance weight
-    #[arg(short, long, default_value_t = 3.5)]
+    #[arg(short, long, default_value_t = 2.0)]
     weight: f64,
 
     /// Blur amount before processing
-    #[arg(short, long, default_value_t = 1.0)]
+    #[arg(short, long, default_value_t = 3.0)]
     blur: f32,
 
     /// Add circles at point locations
