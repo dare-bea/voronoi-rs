@@ -6,9 +6,9 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::path::PathBuf;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
-struct Args {
+pub struct Args {
     /// Input image file path
     input: PathBuf,
 
@@ -34,24 +34,40 @@ struct Args {
     /// Add circles at point locations
     #[arg(long)]
     point_radius: Option<u32>,
+
+    /// Selection power for weighted sampling of points
+    #[arg(long, default_value_t = 0.25)]
+    selection_power: f64,
+
+    /// Selection offset for weighted sampling of points
+    #[arg(long, default_value_t = 0.3)]
+    selection_offset: f64,
 }
 
-fn weight<const N: usize>(&pixel: &(u32, u32, [u8; N]), width: u32, height: u32) -> f64 {
+#[must_use]
+fn weight<const N: usize>(
+    &pixel: &(u32, u32, [u8; N]),
+    width: u32,
+    height: u32,
+    power: f64,
+    offset: f64,
+) -> f64 {
     // Calculate the weight of the pixel based on its distance to the center of the image.
     // Weight is inversely proportional to the distance.
     let center_x = f64::from(width) / 2.0;
     let center_y = f64::from(height) / 2.0;
     let x_dist = (f64::from(pixel.0) - center_x) / f64::from(width);
     let y_dist = (f64::from(pixel.1) - center_y) / f64::from(height);
-    let dist = (x_dist.powi(2) + y_dist.powi(2)).sqrt().sqrt();
+    let dist = (x_dist.powi(2) + y_dist.powi(2)).powf(power);
     let dist_weight = 1.0 / (dist + 1.0);
 
-    dist_weight - 0.3
+    dist_weight - offset
 }
 
 const COLOR_WEIGHT_MULT: f64 = 10000.0;
 
-fn score<const N: usize>(
+#[must_use]
+pub fn score<const N: usize>(
     &pixel: &(u32, u32, [u8; N]),
     &point: &(u32, u32, [u8; N]),
     _img: &image::RgbImage,
@@ -75,10 +91,113 @@ fn score<const N: usize>(
     }
 }
 
+type ScoreFn = dyn Fn(
+    &(u32, u32, [u8; 3]), // pixel
+    &(u32, u32, [u8; 3]), // point
+    &image::RgbImage,     // img
+    f64,                  // color_weight
+    f64,                  // max_color_dist
+    f64,                  // max_pos_dist
+) -> f64;
+
+fn generate_voronoi_(
+    img: &image::RgbImage,
+    points: &[(u32, u32, [u8; 3])],
+    max_color_dist: f64,
+    max_pos_dist: f64,
+    score_fn: &ScoreFn,
+    args: &Args,
+    print_progress: bool,
+) -> image::RgbImage {
+    let img_height = img.height();
+    if print_progress {
+        eprint!("Calculating voronoi diagram... 0 / {img_height}");
+    }
+    let mut voronoi = fast_blur(img, args.blur);
+    for (x, y, pixel) in voronoi.enumerate_pixels_mut() {
+        let mut min_score = f64::MAX;
+        let mut min_color = [0, 0, 0];
+        let mut min_pos = (0, 0);
+        for &(px, py, pcolor) in points {
+            let s = score_fn(
+                &(x, y, pixel.0),
+                &(px, py, pcolor),
+                img,
+                args.weight,
+                max_color_dist,
+                max_pos_dist,
+            );
+            if s < min_score {
+                min_score = s;
+                min_color = pcolor;
+                min_pos = (px, py);
+            }
+        }
+
+        if let Some(radius) = args.point_radius
+            && {
+                let dx = x.abs_diff(min_pos.0);
+                let dy = y.abs_diff(min_pos.1);
+                dx * dx + dy * dy < radius * (radius - 1)
+            }
+        {
+            min_color = min_color.map(|c| u8::MAX - c);
+        }
+
+        *pixel = image::Rgb(min_color);
+
+        if print_progress && x == 0 {
+            eprint!("\rCalculating voronoi diagram... {y} / {img_height} rows");
+        }
+    }
+    if print_progress {
+        eprintln!("\rCalculating voronoi diagram... {img_height} / {img_height} rows");
+    }
+    voronoi
+}
+
+pub fn generate_voronoi(
+    img: &image::RgbImage,
+    points: &[(u32, u32, [u8; 3])],
+    max_color_dist: f64,
+    max_pos_dist: f64,
+    score_fn: &ScoreFn,
+    args: &Args,
+) -> image::RgbImage {
+    generate_voronoi_(
+        img,
+        points,
+        max_color_dist,
+        max_pos_dist,
+        score_fn,
+        args,
+        false,
+    )
+}
+
+pub fn generate_voronoi_print_progress(
+    img: &image::RgbImage,
+    points: &[(u32, u32, [u8; 3])],
+    max_color_dist: f64,
+    max_pos_dist: f64,
+    score_fn: &ScoreFn,
+    args: &Args,
+) -> image::RgbImage {
+    generate_voronoi_(
+        img,
+        points,
+        max_color_dist,
+        max_pos_dist,
+        score_fn,
+        args,
+        true,
+    )
+}
+
 fn main() {
     let args = Args::parse();
 
-    let img = match image::open(args.input) {
+    let img = match image::open(&args.input) {
         Err(err) => {
             eprintln!("Failed to open image: {err}");
             std::process::exit(1);
@@ -120,8 +239,17 @@ fn main() {
     let points = {
         eprint!("Generating {} points...", args.points);
         let mut points: Vec<(u32, u32, [u8; 3])> = Vec::with_capacity(args.points);
-        let weights =
-            WeightedIndex::new(pixels.iter().map(|px| weight(px, img_width, img_height))).unwrap();
+        let weights = WeightedIndex::new(pixels.iter().map(|px| {
+            weight(
+                px,
+                img_width,
+                img_height,
+                args.selection_power,
+                args.selection_offset,
+            )
+            .max(0.0)
+        }))
+        .unwrap();
         for _ in 0..args.points {
             let idx = weights.sample(&mut rng);
             points.push(pixels[idx]);
@@ -130,48 +258,8 @@ fn main() {
         points
     };
 
-    let voronoi = {
-        eprint!("Calculating voronoi diagram... 0 / {img_height}");
-        let mut voronoi = fast_blur(&img, args.blur);
-        for (x, y, pixel) in voronoi.enumerate_pixels_mut() {
-            let mut min_score = f64::MAX;
-            let mut min_color = [0, 0, 0];
-            let mut min_pos = (0, 0);
-            for &(px, py, pcolor) in &points {
-                let s = score(
-                    &(x, y, pixel.0),
-                    &(px, py, pcolor),
-                    &img,
-                    args.weight,
-                    max_color_dist,
-                    max_pos_dist,
-                );
-                if s < min_score {
-                    min_score = s;
-                    min_color = pcolor;
-                    min_pos = (px, py);
-                }
-            }
-
-            if let Some(radius) = args.point_radius
-                && {
-                    let dx = x.abs_diff(min_pos.0);
-                    let dy = y.abs_diff(min_pos.1);
-                    dx * dx + dy * dy < radius * (radius - 1)
-                }
-            {
-                min_color = min_color.map(|c| u8::MAX - c);
-            }
-
-            *pixel = image::Rgb(min_color);
-
-            if x == 0 {
-                eprint!("\rCalculating voronoi diagram... {y} / {img_height} rows");
-            }
-        }
-        eprintln!("\rCalculating voronoi diagram... {img_height} / {img_height} rows");
-        voronoi
-    };
+    let voronoi =
+        generate_voronoi_print_progress(&img, &points, max_color_dist, max_pos_dist, &score, &args);
 
     let save_result = voronoi.save(&args.output);
     if let Err(err) = save_result {
